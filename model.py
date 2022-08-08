@@ -154,11 +154,12 @@ class ToRGB(nn.Module):
         return x
 
 class Synthesis_layer(nn.Module):
-    def __init__(self, in_channels, out_channels, latent_size = 512):
+    def __init__(self, in_channels, out_channels, device, latent_size = 512):
         super().__init__()
         '''
         
         '''
+        self.device = device
         self.style_affline = WSLinear(latent_size, in_channels)
         self.mod_conv = StyleWSConv(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
         self.out_channels = out_channels
@@ -168,16 +169,16 @@ class Synthesis_layer(nn.Module):
         style = self.style_affline(style)
         # if self.upsample is not None:
         #     x = self.upsample(x)
-        x = self.mod_conv(x, style, torch.randn(x.shape[0], self.out_channels, x.shape[2], x.shape[3]))
+        x = self.mod_conv(x, style, torch.randn(x.shape[0], self.out_channels, x.shape[2], x.shape[3]).to(self.device))
         return x
 
 class Synthesis_block(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, device):
         super().__init__()
         self.layers = nn.ModuleList()
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear')
-        self.layers.append(Synthesis_layer(in_channels, out_channels))
-        self.layers.append(Synthesis_layer(out_channels, out_channels))
+        self.layers.append(Synthesis_layer(in_channels, out_channels, device=device))
+        self.layers.append(Synthesis_layer(out_channels, out_channels, device=device))
         self.toRgb = ToRGB(out_channels)
         self.leacy_relu = nn.LeakyReLU(0.2)
 
@@ -188,11 +189,14 @@ class Synthesis_block(nn.Module):
         return x, self.toRgb(x, style)
 
 class StyleGan2_Generator(nn.Module):
-    def __init__(self, max_channels=512, channels_multiplier = 32768, output_resolution=256, w_dim = 512, style_mixing_shresh=0.9, w_avg_beta = 0.995):
+    def __init__(self, device, max_channels=512, channels_multiplier = 32768, output_resolution=256, w_dim = 512, style_mixing_shresh=0.9, w_avg_beta = 0.995):
         super().__init__()
+        #Device
+        self.device = device
+      
         # Mapping Network
         self.mapping_networks = Mapping_network(w_dim, w_dim)
-        self.w_avg = torch.zeros(w_dim)
+        self.w_avg = torch.zeros(w_dim).to(device)
         self.w_avg_beta = w_avg_beta
         self.style_mixing_shresh = style_mixing_shresh
 
@@ -200,12 +204,12 @@ class StyleGan2_Generator(nn.Module):
         steps = int(math.log2(output_resolution))
         self.in_channels_dict = { 2**res : min(max_channels, int(channels_multiplier / 2**res)) for res in range(2, steps + 1)}
         self.const_input = nn.Parameter(torch.randn(1, self.in_channels_dict[4], 4, 4))
-        self.init = Synthesis_layer(self.in_channels_dict[4], self.in_channels_dict[4])
+        self.init = Synthesis_layer(self.in_channels_dict[4], self.in_channels_dict[4], device=device)
         # print(self.in_channels_dict)
 
         self.blocks = nn.ModuleList()
         for step in range(3, steps + 1):
-            self.blocks.append(Synthesis_block(self.in_channels_dict[2 ** (step - 1)], self.in_channels_dict[2 ** step]))
+            self.blocks.append(Synthesis_block(self.in_channels_dict[2 ** (step - 1)], self.in_channels_dict[2 ** step], device=device))
 
         self.rgb_upsample = nn.Upsample(scale_factor=2, mode='bilinear')
 
@@ -220,7 +224,7 @@ class StyleGan2_Generator(nn.Module):
 
     def forward(self, z):
         batch_size = z.shape[0]
-        imgs = torch.zeros(batch_size, 3, 4, 4)
+        imgs = torch.zeros(batch_size, 3, 4, 4).to(self.device)
         const = self.const_input.repeat(batch_size, 1, 1, 1)
 
         # Obtain Latent w and update w average
@@ -297,14 +301,11 @@ class StyleGan2_Discriminator(nn.Module):
 
 
 if __name__ == "__main__":
-    # random_num = torch.randn(3,512)
-    # print(torch.mean(random_num,dim=0))
-
-    z = torch.randn(8,512)
-    d = StyleGan2_Discriminator()
-    g = StyleGan2_Generator()
+    z = torch.randn(4,512).to('cuda')
+    d = StyleGan2_Discriminator().to('cuda')
+    g = StyleGan2_Generator(device='cuda').to('cuda')
 
     imgs, ws = g(z)
     print(imgs.shape, ws.shape)
-    score = torch.tanh(d(imgs))
+    score = d(imgs)
     print(score, score.shape)
