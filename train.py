@@ -146,12 +146,12 @@ def train(gen, critic, g_optim, d_optim, g_scaler, d_scaler, dataloader, pl_loss
                 logger.update('d_loss', d_loss.item())
 
         d_optim.zero_grad()
-        # d_scaler.scale(d_loss).backward()
-        # d_scaler.step(d_optim)
-        # d_scaler.update()
+        d_scaler.scale(d_loss).backward()
+        d_scaler.step(d_optim)
+        d_scaler.update()
 
-        d_loss.backward()
-        d_optim.step()
+        # d_loss.backward()
+        # d_optim.step()
 
         with torch.cuda.amp.autocast():
             # G Logis
@@ -171,12 +171,12 @@ def train(gen, critic, g_optim, d_optim, g_scaler, d_scaler, dataloader, pl_loss
 
         
         g_optim.zero_grad()
-        # g_scaler.scale(g_loss).backward()
-        # g_scaler.step(g_optim)
-        # g_scaler.update()
+        g_scaler.scale(g_loss).backward()
+        g_scaler.step(g_optim)
+        g_scaler.update()
 
-        g_loss.backward()
-        g_optim.step()
+        # g_loss.backward()
+        # g_optim.step()
         # G_ema
         ema.update(gen)
         # Print Log
