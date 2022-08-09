@@ -110,7 +110,7 @@ class PixelNorm(nn.Module):
 
 #Generator
 class Mapping_network(nn.Module):
-    def __init__(self, num_layers = 8, latent_code_dim = 512, w_dim = 512, broadcast = 18, lr_scale_factor=0.01):
+    def __init__(self, num_layers = 8, latent_code_dim = 512, w_dim = 512, lr_scale_factor=0.01):
         '''
         Mapping network with 8 fully connected layers
 
@@ -119,7 +119,6 @@ class Mapping_network(nn.Module):
         :param broadcast: time repeat latents space output
         '''
         super().__init__()
-        self.broadcast = broadcast
         layers = [PixelNorm()]
         for _ in range(num_layers):
             layers.append(WSLinear(latent_code_dim, w_dim, lr_scaler=lr_scale_factor))
@@ -291,7 +290,6 @@ class StyleGan2_Discriminator(nn.Module):
         return torch.cat([x, std], dim=1)
 
     def forward(self, x):
-        # x = self.fromRGB(img)
         x = self.blocks(x)
         x = self.minibatch_std(x)
         x = self.final_conv(x)
@@ -301,11 +299,15 @@ class StyleGan2_Discriminator(nn.Module):
 
 
 if __name__ == "__main__":
-    z = torch.randn(4,512).to('cuda')
-    d = StyleGan2_Discriminator().to('cuda')
-    g = StyleGan2_Generator(device='cuda').to('cuda')
-
-    imgs, ws = g(z)
-    print(imgs.shape, ws.shape)
-    score = d(imgs)
-    print(score, score.shape)
+    z = torch.randn(4,512)
+    d = StyleGan2_Discriminator()
+    g = StyleGan2_Generator(device='cpu')
+    #
+    # imgs, ws = g(z)
+    # print(imgs.shape, ws.shape)
+    # score = d(imgs)
+    # print(score, score.shape)
+    i = 0
+    for k, v in g.state_dict().items():
+        print(k, v.shape)
+        i+=1
