@@ -5,8 +5,10 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import ImageFolder
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
+from torchvision.utils import save_image, make_grid
 from tqdm import tqdm
 from copy import deepcopy
+from utils import Duplicate_checking
 import os, shutil
 
 #Dataset
@@ -73,6 +75,7 @@ class EMA:
             p.requires_grad_(False)
 
     def update(self, model):
+        model.eval()
         with torch.no_grad():
             msd = model.state_dict()
             for key, value in self.ema.state_dict().items():
@@ -87,12 +90,14 @@ class EMA:
 class Logger:
     def __init__(self, root = 'tensorboard'):
         #Logger
+        self.root = root
         self.global_step = 0
         self.logger = {}
 
         #Tensorboard
         shutil.rmtree(root)
         os.makedirs(root)
+        os.makedirs(os.path.join(root, 'imgs'))
         self.writer = SummaryWriter(root)
 
     def update(self, key, value):
@@ -107,6 +112,13 @@ class Logger:
         for k, v in self.logger.items():
             self.writer.add_scalar(k, v['value'], global_step=v['step'])
 
+    def save_sample(self, imgs, name):
+        # print(name, imgs)
+        imgs = make_grid(imgs * 0.5 + 0.5)
+
+        save_image(imgs, fp=self.root+f'/imgs/{name}_{self.global_step}.png')
+
+
 
 
 def train(gen, critic, g_optim, d_optim, g_scaler, d_scaler, dataloader, pl_loss, ema, num_iters, args, logger):#, z_dim, device, g_reg_interval, d_reg_interval, r1_gamma, ):
@@ -114,92 +126,89 @@ def train(gen, critic, g_optim, d_optim, g_scaler, d_scaler, dataloader, pl_loss
     loop = tqdm(dataloader, leave=True)
     for idx, (real, _) in enumerate(loop):
         real = real[:,:3,:,:].to(args['device']).requires_grad_(True)
-
+        gen.train()
+        critic.train()
         
         batch_size = real.shape[0]
         z = torch.randn(batch_size, args['w_dim']).to(args['device'])
 
         d_loss = 0
         g_loss = 0
-        with torch.cuda.amp.autocast():          
+
+        # with torch.cuda.amp.autocast():
             # D non saturating logistic loss
-            gen_imgs, ws = gen(z)
-            d_fake_score = critic(gen_imgs.detach())
-            d_fake_loss = F.softplus(d_fake_score)
-            d_real_score = critic(real)
-            d_real_loss = F.softplus(-d_real_score)
+        gen_imgs, ws = gen(z)
 
-            # D R1 reg
-            if num_iters % args['d_lazy_reg'] == 0:
-                r1_grad = torch.autograd.grad(outputs=torch.sum(d_real_score), inputs = real, create_graph=True, retain_graph=True)[0]
-                r1_panalty = torch.sum(r1_grad ** 2, dim=[1,2,3])
-                loss_r1 = r1_panalty * (args['r1_gamma'] / 2)
-                loss_r1 = torch.mean(d_real_loss + loss_r1) * args['d_lazy_reg']
-                d_loss = torch.mean(d_fake_loss) + loss_r1
+        d_fake_score = critic(gen_imgs.detach())
+        d_fake_loss = F.softplus(d_fake_score)
+        d_real_score = critic(real)
+        d_real_loss = F.softplus(-d_real_score)
 
-                #Log
-                logger.update('d_loss', d_loss.item())
-                logger.update('d_r1_reg', loss_r1.item())
-            else:
-                d_loss = torch.mean(d_fake_loss) + torch.mean(d_real_loss)
-                #Log
-                logger.update('d_loss', d_loss.item())
+        # D R1 reg
+        if num_iters % args['d_lazy_reg'] == 0:
+            r1_grad = torch.autograd.grad(outputs=torch.sum(d_real_score), inputs = real, create_graph=True, retain_graph=True)[0]
+            r1_panalty = torch.sum(r1_grad ** 2, dim=[1,2,3])
+            loss_r1 = r1_panalty * (args['r1_gamma'] / 2)
+            loss_r1 = torch.mean(d_real_loss + loss_r1) * args['d_lazy_reg']
+            d_loss = torch.mean(d_fake_loss) + loss_r1
+
+            #Log
+            logger.update('d_loss', d_loss.item())
+            logger.update('d_r1_reg', loss_r1.item())
+        else:
+            d_loss = torch.mean(d_fake_loss) + torch.mean(d_real_loss)
+            #Log
+            logger.update('d_loss', d_loss.item())
 
         d_optim.zero_grad()
-        d_scaler.scale(d_loss).backward()
-        d_scaler.step(d_optim)
-        d_scaler.update()
+        # d_scaler.scale(d_loss).backward()
+        # d_scaler.step(d_optim)
+        # d_scaler.update()
 
-        # d_loss.backward()
-        # d_optim.step()
+        d_loss.backward()
+        d_optim.step()
 
-        with torch.cuda.amp.autocast():
-            # G Logis
-            g_fake_loss = F.softplus(-critic(gen_imgs))
-            # G Path length reg
-            if num_iters % args['g_lazy_reg'] == 0:
-                pl_reg = pl_loss(gen, z)
-                g_loss = torch.mean(g_fake_loss) + (torch.mean(pl_reg) * args['g_lazy_reg'])
+        # with torch.cuda.amp.autocast():
+        # G Logis
+        g_fake_loss = F.softplus(-critic(gen_imgs))
+        # G Path length reg
+        if num_iters % args['g_lazy_reg'] == 0:
+            pl_reg = pl_loss(gen, z)
+            pl_reg = torch.mean(pl_reg) * args['g_lazy_reg']
+            g_loss = torch.mean(g_fake_loss) + pl_reg
 
-                # Log
-                logger.update('g_loss', g_loss.item())
-                logger.update('g_pl_reg', pl_reg.item())
-            else:
-                g_loss = torch.mean(g_fake_loss)
-                # Log
-                logger.update('g_loss', g_loss.item())
+            # Log
+            logger.update('g_loss', g_loss.item())
+            logger.update('g_pl_reg', pl_reg.item())
+        else:
+            g_loss = torch.mean(g_fake_loss)
+            # Log
+            logger.update('g_loss', g_loss.item())
 
         
         g_optim.zero_grad()
-        g_scaler.scale(g_loss).backward()
-        g_scaler.step(g_optim)
-        g_scaler.update()
+        # g_scaler.scale(g_loss).backward()
+        # g_scaler.step(g_optim)
+        # g_scaler.update()
 
-        # g_loss.backward()
-        # g_optim.step()
+        g_loss.backward()
+        g_optim.step()
+
         # G_ema
         ema.update(gen)
         # Print Log
         logger.step()
+        if idx % args['save_per_iter'] == 0:
+            logger.save_sample(real, name='real')
+            logger.save_sample(gen_imgs, name='gen')
+            logger.save_sample(ema.generate(torch.randn(16,512).to(args['device']))[0], name='ema')
+            loop.set_postfix(log=f"Dubs> img_dub:{Duplicate_checking(real.detach())} gen_imgs_dub:{Duplicate_checking(gen_imgs.detach())}  score fake: {Duplicate_checking(d_fake_score.detach())} score real: {Duplicate_checking(d_real_score.detach())}")
+
 
 if __name__ == "__main__":
-    r_latent = torch.randn(4, 512)
-    unsqueeze_latent = r_latent.unsqueeze(1)
-    repeat_latent = unsqueeze_latent.repeat(1, 18, 1)
-
-    pl_length1 = torch.sqrt((r_latent ** 2).sum(1,keepdims=True).mean(1))
-    pl_length2 = torch.sqrt((unsqueeze_latent ** 2).sum(2).mean(1))
-    pl_length3 = torch.sqrt((repeat_latent ** 2).sum(2).mean(1))
-    print(pl_length1, pl_length2, pl_length3)
-
-    # from model import StyleGan2_Generator
-    # g = StyleGan2_Generator(device='cpu')
-    # g2 = StyleGan2_Generator(device='cpu')
-    # ema = EMA(model=g, decay=0.995)
-    # ema.update(g2)
-    #
-    # for i, j, k in zip(g.state_dict().items(), g2.state_dict().items(), ema.ema.state_dict().items()):
-    #     print(i)
-    #     print(j)
-    #     print(k)
-    #     break
+    from model import StyleGan2_Generator
+    z = torch.randn(4,512).to('cuda')
+    g = StyleGan2_Generator(device='cuda').to('cuda')
+    g.train()
+    imgs, ws = g(z)
+    # print(Duplicate_checking(torch.randn(5,3,256,256)))

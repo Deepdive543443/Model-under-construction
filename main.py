@@ -16,10 +16,15 @@ def main():
 
     args['ema_beta'] = 0.5 ** (args['batch_size'] / args['ema_kimg'] * 1e3)
 
+    args['g_beta_1'] = args['g_beta_1'] ** c_g
+    args['g_beta_2'] = args['g_beta_2'] ** c_g
+    args['d_beta_1'] = args['d_beta_1'] ** c_d
+    args['d_beta_1'] = args['d_beta_1'] ** c_d
+
     print(args)
     # Models
     print('Setting up model......')
-    gen = StyleGan2_Generator(args['device'], output_resolution=args['resolution']).to(args['device'])
+    gen = StyleGan2_Generator(device=args['device'], output_resolution=args['resolution']).to(args['device'])
     critic = StyleGan2_Discriminator(output_resolution=args['resolution']).to(args['device'])
 
     # Optimizer
@@ -56,12 +61,12 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('-p','--path',type=str,  default="E:/exercise/ProgressiveGAN/Anime256", help='path of the image folder')
     ap.add_argument('-w', '--num_worker', type=int, default=0, help='num_worker for dataloader')
-    ap.add_argument('-s','--save_per_iter',type=int,  default=200, help='Save model and output per iteration')
+    ap.add_argument('-s','--save_per_iter',type=int,  default=20, help='Save model and output per iteration')
     ap.add_argument('-sp','--save_path',type=str,  default="model", help='the path of saving model')
     ap.add_argument('-l','--load_path',type=str,  default="model", help='the path of loading model')
 
     # Model's hyper parameters
-    ap.add_argument('-b','--batch_size',type=int,  default=3, help='batchsize_of_training')
+    ap.add_argument('-b','--batch_size',type=int,  default=5, help='batchsize_of_training')
     ap.add_argument('-r','--resolution',type=int,  default=256, help='resolution_of_training')
     ap.add_argument('-zd','--z_dim',type=int,  default=512, help="noise input's dimensions")
     ap.add_argument('-wd','--w_dim',type=int,  default=512, help="mapping's dimensions")
@@ -92,7 +97,7 @@ if __name__ == '__main__':
     ap.add_argument('-ek', '--ema_kimg', type=int, default=20, help="ema per kimg?")
 
     #Device
-    ap.add_argument('-d','--device',type=str,  default="cpu", help="device")
+    ap.add_argument('-d','--device',type=str,  default="cuda", help="device")
 
     args = vars(ap.parse_args())
     main()
